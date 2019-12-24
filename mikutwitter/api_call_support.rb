@@ -101,14 +101,38 @@ module MikuTwitter::ApiCallSupport
     module Parser
       extend Parser
 
+      # 内容のバリエーションが少なく、dedupしたほうが効率的と考えられるキー
+      # 廃止予定となったために代替値が配信されているものも多い
+      DEDUP_MESSAGE_KEYS = %i[
+        filter_level
+        lang
+      ]
+      DEDUP_USER_KEYS = %i[
+        profile_background_color
+        profile_link_color
+        profile_sidebar_border_color
+        profile_sidebar_fill_color
+        profile_text_color
+        profile_background_image_url
+        profile_background_image_url_https
+        translator_type
+      ]
+
       def message(msg)
         cnv = msg.dup
         cnv[:message] = msg[:full_text] || msg[:text]
-        cnv[:source] = $1 if cnv[:source].is_a?(String) and cnv[:source].match(/\A<a\s+.*>(.*?)<\/a>\Z/)
+        cnv[:source] = -$1 if cnv[:source].is_a?(String) and cnv[:source].match(/\A<a\s+.*>(.*?)<\/a>\Z/)
         cnv[:created] = (Time.parse(msg[:created_at]).localtime rescue Time.now)
         cnv[:user] = user(msg[:user])
         cnv[:retweet] = message(msg[:retweeted_status]) if msg[:retweeted_status]
         cnv[:exact] = [:created_at, :source, :user, :retweeted_status].all?{|k|msg.has_key?(k)}
+        DEDUP_MESSAGE_KEYS.each {|k| cnv[k] = -cnv[k] if cnv[k].is_a? String }
+        if cnv[:entities] && cnv[:entities][:media]
+          cnv[:entities][:media] = dedup_media_entity_props(cnv[:entities][:media])
+        end
+        if cnv[:extended_entities] && cnv[:extended_entities][:media]
+          cnv[:extended_entities][:media] = dedup_media_entity_props(cnv[:extended_entities][:media])
+        end
         message = cnv[:exact] ? Plugin::Twitter::Message.rewind(cnv) : Plugin::Twitter::Message.new_ifnecessary(cnv)
         # search/tweets.json の戻り値のquoted_statusのuserがたまにnullだゾ〜
         if msg[:quoted_status].is_a?(Hash) and msg[:quoted_status][:user]
@@ -138,11 +162,18 @@ module MikuTwitter::ApiCallSupport
         else
           cnv[:message] = msg[:text]
         end
-        cnv[:source] = $1 if cnv[:source].is_a?(String) and cnv[:source].match(/\A<a\s+.*>(.*?)<\/a>\Z/)
+        cnv[:source] = -$1 if cnv[:source].is_a?(String) and cnv[:source].match(/\A<a\s+.*>(.*?)<\/a>\Z/)
         cnv[:created] = (Time.parse(msg[:created_at]).localtime rescue Time.now)
         cnv[:user] = user(msg[:user])
         cnv[:retweet] = streaming_message(msg[:retweeted_status]) if msg[:retweeted_status]
         cnv[:exact] = [:created_at, :source, :user, :retweeted_status].all?{|k|msg.has_key?(k)}
+        DEDUP_MESSAGE_KEYS.each {|k| cnv[k] = -cnv[k] if cnv[k].is_a? String }
+        if cnv[:entities] && cnv[:entities][:media]
+          cnv[:entities][:media] = dedup_media_entity_props(cnv[:entities][:media])
+        end
+        if cnv[:extended_entities] && cnv[:extended_entities][:media]
+          cnv[:extended_entities][:media] = dedup_media_entity_props(cnv[:extended_entities][:media])
+        end
         message = cnv[:exact] ? Plugin::Twitter::Message.rewind(cnv) : Plugin::Twitter::Message.new_ifnecessary(cnv)
         # search/tweets.json の戻り値のquoted_statusのuserがたまにnullだゾ〜
         if msg[:quoted_status].is_a?(Hash) and msg[:quoted_status][:user]
@@ -165,6 +196,9 @@ module MikuTwitter::ApiCallSupport
         cnv[:verified] = u[:verified]
         cnv[:following] = u[:following]
         cnv[:exact] = [:created_at, :description, :protected, :followers_count, :friends_count, :verified].all?{|k|u.has_key?(k)}
+        DEDUP_USER_KEYS.each {|k| cnv[k] = -cnv[k] if cnv[k].is_a? String }
+        # あまりにも使わなそうだし、パースもしないので思いきって捨てる
+        cnv.delete(:status)
         # ユーザの見た目が変わっても過去のTweetのアイコン等はそのままにしたいので、新しいUserを作る
         existing_user = Plugin::Twitter::User.findbyid(u[:id].to_i, Diva::DataSource::USE_LOCAL_ONLY)
         if visually_changed?(existing_user, cnv)
@@ -198,6 +232,21 @@ module MikuTwitter::ApiCallSupport
       def id(id)
         id end
 
+      def dedup_media_entity_props(media_entities)
+        media_entities.map do |media|
+          media[:type] = -media[:type] if media[:type].is_a? String
+
+          if media[:sizes]
+            media[:sizes] = media[:sizes].map do |key, size|
+                              size[:resize] = -size[:resize] if size[:resize].is_a? String
+
+                              [key, size]
+                            end.to_h
+          end
+
+          media
+        end
+      end
     end
 
   end
